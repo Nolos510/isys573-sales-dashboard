@@ -69,7 +69,7 @@ date,region,category,product,units_sold,unit_price,discount_pct,revenue,channel,
 2024-01-03,Midwest,Home & Garden,Scented Candle,49,272.77,0,13365.73,In-Store,Bob Chen
 2024-01-04,West,Toys,Building Blocks,15,31.97,0,479.55,In-Store,Bob Chen
 2024-01-04,East,Apparel,Wool Socks,5,57.37,0,286.85,Online,Ivan Petrov
-2024-01-04,East,Apparel,Wool Socks,5,57.37,0,286.85,Online,Ivan Petrov
+2024-01-04,South,Beauty,Nail Polish Kit,20,242.37,20,3877.92,Online,Fiona Grant
 ```
 
 ## Conventions And Caveats
