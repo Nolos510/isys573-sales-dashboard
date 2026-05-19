@@ -33,7 +33,8 @@ def load_data(path: Path = DATA_PATH) -> pd.DataFrame:
         raise FileNotFoundError(f"Sales data not found: {path}")
     df = pd.read_csv(path, parse_dates=["date"])
     required = {"date", "region", "category", "product",
-                "units_sold", "unit_price", "revenue", "channel"}
+                "units_sold", "unit_price", "revenue", "channel",
+                "discount_pct"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Missing columns: {missing}")
@@ -142,6 +143,58 @@ def build_top_products(df: pd.DataFrame, n: int = 10) -> go.Figure:
     return fig
 
 
+def build_discount_impact(df: pd.DataFrame) -> go.Figure:
+    """Revenue and transaction count by readable discount band."""
+    discount_order = ["0%", "0-5%", "5-10%", "10-15%", "15%+"]
+    discount_values = pd.to_numeric(df["discount_pct"], errors="coerce").fillna(0)
+    banded = df.assign(
+        discount_band=pd.cut(
+            discount_values,
+            bins=[-0.001, 0, 5, 10, 15, float("inf")],
+            labels=discount_order,
+            include_lowest=True,
+        )
+    )
+    summary = (
+        banded.groupby("discount_band", observed=False)
+        .agg(revenue=("revenue", "sum"), transactions=("revenue", "size"))
+        .reindex(discount_order)
+        .fillna({"revenue": 0, "transactions": 0})
+        .reset_index()
+    )
+
+    fig = go.Figure(go.Bar(
+        x=summary["discount_band"].astype(str),
+        y=summary["revenue"],
+        customdata=summary["transactions"],
+        marker_color=["#607D8B", "#26A69A", "#FFB74D", "#EF5350", "#7E57C2"],
+        hovertemplate=(
+            "<b>%{x}</b><br>Revenue: $%{y:,.0f}<br>"
+            "Transactions: %{customdata:,.0f}<extra></extra>"
+        ),
+    ))
+    fig.update_layout(
+        title="Discount Impact Analysis",
+        plot_bgcolor="white",
+        xaxis=dict(title="Discount Band"),
+        yaxis=dict(tickprefix="$", tickformat=",.0f", title="Revenue ($)"),
+        showlegend=False,
+        margin=dict(t=50, b=40),
+    )
+    return fig
+
+
+def build_discount_kpis(df: pd.DataFrame) -> tuple[str, str]:
+    """Return average discount and discounted transaction share as KPI strings."""
+    if df.empty:
+        return "0.0%", "0.0%"
+
+    discount_values = pd.to_numeric(df["discount_pct"], errors="coerce").fillna(0)
+    avg_discount = discount_values.mean()
+    discounted_share = (discount_values > 0).mean() * 100
+    return f"{avg_discount:.1f}%", f"{discounted_share:.1f}%"
+
+
 def kpi_card_html(label: str, value: str, color: str = "#2196F3") -> str:
     """Render a single KPI card as HTML."""
     return f"""
@@ -174,16 +227,20 @@ def build_html(df: pd.DataFrame) -> str:
                 "monthly": empty.to_json(),
                 "category": empty.to_json(),
                 "top_products": empty.to_json(),
+                "discount": empty.to_json(),
                 "total_revenue": "$0",
                 "total_orders": "0",
                 "avg_order": "$0",
                 "top_region": "—",
+                "avg_discount": "0.0%",
+                "discounted_transactions": "0.0%",
             }
             continue
 
         total_rev = subset["revenue"].sum()
         total_orders = len(subset)
         avg_order = total_rev / total_orders if total_orders else 0
+        avg_discount, discounted_transactions = build_discount_kpis(subset)
         top_region = (
             subset.groupby("region")["revenue"].sum().idxmax()
             if not subset.empty else "—"
@@ -194,10 +251,13 @@ def build_html(df: pd.DataFrame) -> str:
             "monthly":      build_monthly_line(subset).to_json(),
             "category":     build_category_pie(subset).to_json(),
             "top_products": build_top_products(subset).to_json(),
+            "discount":     build_discount_impact(subset).to_json(),
             "total_revenue": f"${total_rev:,.0f}",
             "total_orders":  f"{total_orders:,}",
             "avg_order":     f"${avg_order:,.0f}",
             "top_region":    top_region,
+            "avg_discount":  avg_discount,
+            "discounted_transactions": discounted_transactions,
         }
 
     # Serialize all chart data to embed in HTML
@@ -232,6 +292,7 @@ def build_html(df: pd.DataFrame) -> str:
                   gap:20px;padding:16px 32px 32px;}}
     .chart-card{{background:#fff;border-radius:10px;
                  padding:8px;box-shadow:0 2px 8px rgba(0,0,0,.06);}}
+    .chart-card-wide{{grid-column:1 / -1;}}
     @media(max-width:800px){{.charts-grid{{grid-template-columns:1fr;}}}}
     footer{{text-align:center;padding:16px;font-size:12px;color:#999;
             border-top:1px solid #e0e6ed;background:#fff;}}
@@ -264,6 +325,7 @@ def build_html(df: pd.DataFrame) -> str:
   <div class="chart-card"><div id="chartMonthly" style="height:340px;"></div></div>
   <div class="chart-card"><div id="chartCategory"    style="height:340px;"></div></div>
   <div class="chart-card"><div id="chartTopProducts" style="height:340px;"></div></div>
+  <div class="chart-card chart-card-wide"><div id="chartDiscount" style="height:360px;"></div></div>
 </div>
 
 <footer>
@@ -275,9 +337,9 @@ def build_html(df: pd.DataFrame) -> str:
 <script>
 const DATA = {chart_json};
 
-const KPI_COLORS = ["#2196F3","#4CAF50","#FF9800","#9C27B0"];
-const KPI_LABELS = ["Total Revenue","Transactions","Avg Transaction","Top Region"];
-const KPI_KEYS   = ["total_revenue","total_orders","avg_order","top_region"];
+const KPI_COLORS = ["#2196F3","#4CAF50","#FF9800","#9C27B0","#26A69A","#EF5350"];
+const KPI_LABELS = ["Total Revenue","Transactions","Avg Transaction","Top Region","Avg Discount","Discounted Transactions"];
+const KPI_KEYS   = ["total_revenue","total_orders","avg_order","top_region","avg_discount","discounted_transactions"];
 
 function applyFilter(quarter) {{
   const d = DATA[quarter];
@@ -298,6 +360,7 @@ function applyFilter(quarter) {{
   Plotly.react("chartMonthly",     JSON.parse(d.monthly).data,     JSON.parse(d.monthly).layout,     {{responsive:true}});
   Plotly.react("chartCategory",    JSON.parse(d.category).data,    JSON.parse(d.category).layout,    {{responsive:true}});
   Plotly.react("chartTopProducts", JSON.parse(d.top_products).data, JSON.parse(d.top_products).layout, {{responsive:true}});
+  Plotly.react("chartDiscount",    JSON.parse(d.discount).data,     JSON.parse(d.discount).layout,     {{responsive:true}});
 
   document.getElementById("filterLabel").textContent =
     quarter === "Full Year" ? "Showing all 2024 data" : `Showing ${{quarter}} 2024 only`;
@@ -317,17 +380,17 @@ def main() -> None:
     parser.add_argument("--output", default="dashboard.html", help="Output HTML file")
     args = parser.parse_args()
 
-    print(f"Loading data from {args.data} …")
+    print(f"Loading data from {args.data} ...")
     df = load_data(Path(args.data))
-    print(f"  {len(df)} rows · {df['region'].nunique()} regions · "
+    print(f"  {len(df)} rows | {df['region'].nunique()} regions | "
           f"{df['category'].nunique()} categories")
 
-    print("Building dashboard …")
+    print("Building dashboard ...")
     html = build_html(df)
 
     out = Path(args.output)
     out.write_text(html, encoding="utf-8")
-    print(f"✅  Dashboard saved → {out.resolve()}")
+    print(f"Dashboard saved -> {out.resolve()}")
     print(f"   Open in browser: file://{out.resolve()}")
 
 
